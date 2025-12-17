@@ -138,5 +138,7 @@ node index.js
 
 ## Support
 [Discord](https://discord.gg/aethereal)
+
 [X](https://x.com/aethereal_co)
+
 [Aomine](https://x.com/aominehg)
