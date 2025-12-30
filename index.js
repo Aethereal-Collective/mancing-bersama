@@ -7,18 +7,25 @@ import {
 import bs58 from "bs58";
 import fetch from "node-fetch";
 import { Buffer } from "buffer";
+import dotenv from "dotenv";
 
+dotenv.config();
+
+// Fixed endpoints
 const RPC_URL = "https://eu.fogo.fluxrpc.com/?key=74a5f926-d7b0-4c72-9a5c-0eaec1a57781";
 const PAYMASTER_URL = "https://mainnet.fogo-paymaster.xyz/api/sponsor_and_send?domain=https%3A%2F%2Ffogofishing.com";
 const CAPABILITY_URL = "https://cast.fogofishing.com/capability";
 const PROGRAM_ID = new PublicKey("SEAyjT1FUx3JyXJnWt5NtjELDwuU9XsoZeZVPVvweU4");
 
-const SESSION_KEY_B58 = "SESSION_KEY";
-const OWNER = new PublicKey("SOLANA_ADDRESS");
-const DISCORD_WEBHOOK_URL = "DISCORD_WEBHOOK_URL";
-const TX_TEMPLATE_B64 = "TX_TEMPLATE";
-const CAST_INTERVAL_MS = 3000;
-const MAX_CASTS = 0;
+// Config from .env
+const SESSION_KEY_B58 = process.env.SESSION_KEY_B58;
+const OWNER = new PublicKey(process.env.OWNER);
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
+const TX_TEMPLATE_B64 = process.env.TX_TEMPLATE_B64;
+const CAST_INTERVAL_MS = parseInt(process.env.CAST_INTERVAL_MS) || 3000;
+const MAX_CASTS = parseInt(process.env.MAX_CASTS) || 0;
+
+// Derived values
 const PLAYER_SEED = Buffer.from("player");
 const FISH_DECIMALS = 1e6;
 const formatFish = (raw) => (raw / FISH_DECIMALS).toFixed(3);
