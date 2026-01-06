@@ -96,7 +96,7 @@ node index.js
 
 **Alternative: Capture New Session Key**
 
-If the above script fails with "key is not extractable", run this BEFORE logging in:
+If the above script fails with "key is not extractable", run this AFTER logging in:
 
 ```javascript
 (function() {
