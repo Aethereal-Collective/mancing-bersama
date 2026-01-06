@@ -109,7 +109,7 @@ If the above script fails with "key is not extractable", run this AFTER logging 
 })();
 ```
 
-run this to capture the session key and then Click Login:
+Logout and run this to capture the session key and then Click Login:
 
 ```javascript
 const originalGenerateKey = crypto.subtle.generateKey;
