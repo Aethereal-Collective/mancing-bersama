@@ -34,11 +34,14 @@ sequenceDiagram
 # 1. Install dependencies
 npm install
 
-# 2. Run the bot
+# 2. Copy .env-example to .env and fill in your values
+cp .env-example .env
+
+# 3. Run the bot
 node index.js
 ```
 
-## Configuration (index.js)
+## Configuration (.env)
 
 | Variable | Description |
 |----------|-------------|
@@ -49,11 +52,80 @@ node index.js
 | `MAX_CASTS` | Max casts (0 = unlimited) |
 | `TX_TEMPLATE_B64` | Browser TX template |
 
-### How to Get Session Key
+---
 
-1. Open [Fogo Fishing](https://app.fogofishing.com) and login with wallet
-2. Open browser DevTools (F12) → Console tab
-3. Paste and run this script:
+## How to Get Session Key
+
+### Method 1: Tampermonkey (Recommended)
+
+Console intercept scripts often fail because keys are generated with `extractable: false`. **Tampermonkey** intercepts BEFORE page load, guaranteeing success.
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) browser extension
+2. Click Tampermonkey icon → **Create new script**
+3. Replace all content with:
+
+```javascript
+// ==UserScript==
+// @name         Fogo Session Extractor
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @match        *://*fogo*/*
+// @run-at       document-start
+// @grant        unsafeWindow
+// ==/UserScript==
+
+(function() {
+    console.log("=== TAMPERMONKEY STARTING ===");
+    
+    indexedDB.deleteDatabase("sessionsdb");
+    
+    const target = unsafeWindow.crypto || window.crypto;
+    const orig = target.subtle.generateKey.bind(target.subtle);
+    
+    target.subtle.generateKey = async function(algo, ext, usages) {
+        console.log("🔓 INTERCEPTED generateKey!");
+        const result = await orig(algo, true, usages);
+        
+        if (result.privateKey) {
+            try {
+                const priv = await target.subtle.exportKey('pkcs8', result.privateKey);
+                const pub = await target.subtle.exportKey('raw', result.publicKey);
+                console.log('====================================');
+                console.log('🔑 SESSION KEY CAPTURED!');
+                console.log('PRIVATE_PKCS8_B64:', btoa(String.fromCharCode(...new Uint8Array(priv))));
+                console.log('PUBLIC_RAW_B64:', btoa(String.fromCharCode(...new Uint8Array(pub))));
+                console.log('====================================');
+            } catch(e) {
+                console.log("Export error:", e);
+            }
+        }
+        return result;
+    };
+    
+    console.log("=== TAMPERMONKEY READY ===");
+})();
+```
+
+4. Press **Ctrl+S** to save
+5. **Close** all Fogo tabs
+6. Open https://app.fogofishing.com
+7. Login and Open DevTools (F12) → Console
+8. Find **PRIVATE_PKCS8_B64** value
+
+9. Convert to SESSION_KEY_B58:
+```bash
+node convert-session.js
+```
+
+10. Copy the `SESSION_KEY_B58` output to your `.env` file
+
+---
+
+### Method 2: Console Script (May fail if key not extractable)
+
+1. Open [Fogo Fishing](https://app.fogofishing.com) and login
+2. Open DevTools (F12) → Console
+3. Paste this script:
 
 ```javascript
 (async () => {
@@ -63,105 +135,29 @@ node index.js
     const tx = db.transaction("sessions", "readonly");
     tx.objectStore("sessions").getAll().onsuccess = async (ev) => {
       const item = ev.target.result[0];
-      
       const privPkcs8 = await crypto.subtle.exportKey("pkcs8", item.sessionKey.privateKey);
-      const pubRaw = await crypto.subtle.exportKey("raw", item.sessionKey.publicKey);
-      
-      const privBytes = new Uint8Array(privPkcs8).slice(16, 48);
-      const pubBytes = new Uint8Array(pubRaw);
-      
-      const full = new Uint8Array(64);
-      full.set(privBytes, 0);
-      full.set(pubBytes, 32);
-      
-      const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-      let n = BigInt('0x' + [...full].map(b => b.toString(16).padStart(2,'0')).join(''));
-      let r = '';
-      while (n > 0) { r = A[Number(n % 58n)] + r; n /= 58n; }
-      
-      console.log("🔑 SESSION PRIVATE KEY:");
-      console.log(r);
-      
-      let pn = BigInt('0x' + [...pubBytes].map(b => b.toString(16).padStart(2,'0')).join(''));
-      let pr = '';
-      while (pn > 0) { pr = A[Number(pn % 58n)] + pr; pn /= 58n; }
-      console.log("Public key:", pr);
+      console.log("PRIVATE_PKCS8_B64:", btoa(String.fromCharCode(...new Uint8Array(privPkcs8))));
     };
   };
 })();
 ```
 
-4. Copy the **SESSION PRIVATE KEY** output
-5. Paste into `SESSION_KEY_B58` in index.js
+4. If you get "key is not extractable" error, use **Method 1 (Tampermonkey)** instead.
 
-**Alternative: Capture New Session Key**
+---
 
-If the above script fails with "key is not extractable", run this AFTER logging in:
+## How to Get TX_TEMPLATE_B64
 
-```javascript
-(function() {
-    const originalGenerateKey = crypto.subtle.generateKey;
-    crypto.subtle.generateKey = async function(algorithm, extractable, keyUsages) {
-        console.log("🔑 FOGO INTERCEPTOR: Forcing extractable: true");
-        return originalGenerateKey.call(crypto.subtle, algorithm, true, keyUsages);
-    };
-    console.log("✅ Interceptor active. Please login or re-establish session now.");
-})();
-```
+> ⚠️ **Important**: You must capture TX_TEMPLATE AFTER session key is registered. Cast once in browser first!
 
-Logout and run this to capture the session key and then Click Login:
+1. Open [Fogo Fishing](https://app.fogofishing.com) and login
+2. Open DevTools (F12) → **Network tab**
+3. Click "Cast" button in the game
+4. Find the request to `sponsor_and_send`
+5. Click on it → **Payload tab** → copy the `transaction` value
+6. Paste into `TX_TEMPLATE_B64` in `.env`
 
-```javascript
-const originalGenerateKey = crypto.subtle.generateKey;
-crypto.subtle.generateKey = async function(...args) {
-    if (args[1] && args[1].name === 'Ed25519') {
-        args[2] = true;
-    }
-    const result = await originalGenerateKey.apply(this, args);
-    
-    if (result.privateKey && result.publicKey) {
-        try {
-            const privRaw = await crypto.subtle.exportKey('pkcs8', result.privateKey);
-            const pubRaw = await crypto.subtle.exportKey('raw', result.publicKey);
-            console.log('🔑 SESSION KEY CAPTURED!');
-            console.log('Private (pkcs8):', btoa(String.fromCharCode(...new Uint8Array(privRaw))));
-            console.log('Public (raw):', btoa(String.fromCharCode(...new Uint8Array(pubRaw))));
-        } catch(e) {}
-    }
-    return result;
-}
-
-console.log('✅ Session key capture ready. Now sign a new session.');
-```
-
-then use `convert-session.js` to convert the captured keys to base58 format.
-
-### How to Get TX_TEMPLATE_B64
-
-1. Open [Fogo Fishing](https://app.fogofishing.com) and login with wallet
-2. Open browser DevTools (F12) → Network tab
-3. Click "Cast" button in the game once
-4. Find the request to `sponsor_and_send` in Network tab
-5. Click on it → Payload tab → copy the `transaction` value
-6. Paste into `TX_TEMPLATE_B64` in index.js
-
-**Or use console script:**
-
-```javascript
-const originalFetch = window.fetch;
-window.fetch = async (...args) => {
-  const res = await originalFetch(...args);
-  if (args[0]?.includes?.('sponsor_and_send')) {
-    const body = JSON.parse(args[1]?.body || '{}');
-    if (body.transaction) {
-      console.log("🔑 TX_TEMPLATE_B64:");
-      console.log(body.transaction);
-    }
-  }
-  return res;
-};
-console.log("✅ Interceptor ready. Click Cast now!");
-```
+---
 
 ## Running
 
@@ -178,9 +174,16 @@ node index.js
 # Ctrl+A, D to detach
 ```
 
+## Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| `Cannot sign with non signer key` | Session key not registered on-chain. Cast in browser first, then capture new TX_TEMPLATE |
+| `key is not extractable` | Use Tampermonkey method instead of console scripts |
+| `provided secretKey is invalid` | Re-run convert-session.js with PRIVATE_PKCS8_B64 only |
+
 ## Support
-[Discord](https://discord.gg/aethereal)
 
-[X](https://x.com/aethereal_co)
-
-[Aomine](https://x.com/aominehg)
+- [Discord](https://discord.gg/aethereal)
+- [X](https://x.com/aethereal_co)
+- [Aomine](https://x.com/aominehg)
