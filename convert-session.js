@@ -1,27 +1,31 @@
 import bs58 from "bs58";
+import nacl from "tweetnacl";
 import readline from "readline";
 
 function base64ToUint8Array(base64) {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
+    const binaryString = Buffer.from(base64, 'base64');
+    return new Uint8Array(binaryString);
 }
 
-function convertSession(privatePkcs8B64, publicRawB64) {
+function convertSession(privatePkcs8B64) {
     const privPkcs8 = base64ToUint8Array(privatePkcs8B64);
-    const pubRaw = base64ToUint8Array(publicRawB64);
-    const privSeed = privPkcs8.slice(16, 48);
-    const fullKeypair = new Uint8Array(64);
-    fullKeypair.set(privSeed, 0);
-    fullKeypair.set(pubRaw, 32);
+
+    // PKCS8 format for Ed25519: 48 bytes total
+    // Bytes 0-15: ASN.1 header
+    // Bytes 16-47: 32-byte seed
+    if (privPkcs8.length !== 48) {
+        throw new Error(`Invalid PKCS8 length: ${privPkcs8.length} (expected 48)`);
+    }
+
+    const seed = privPkcs8.slice(16, 48);
+
+    // Use tweetnacl to derive proper Ed25519 keypair from seed
+    const keypair = nacl.sign.keyPair.fromSeed(seed);
 
     return {
-        sessionKeyB58: bs58.encode(fullKeypair),
-        publicKeyB58: bs58.encode(pubRaw),
-        length: fullKeypair.length
+        sessionKeyB58: bs58.encode(keypair.secretKey),
+        publicKeyB58: bs58.encode(keypair.publicKey),
+        length: keypair.secretKey.length
     };
 }
 
@@ -31,48 +35,59 @@ function showInstructions() {
 ║                    FOGO SESSION KEY CONVERTER                    ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-STEP 1: Open Fogo Fishing in your browser
-STEP 2: Open DevTools (F12) → Console tab
-STEP 3: Paste the following script to install the hook:
+METHOD 1: TAMPERMONKEY (Recommended)
+────────────────────────────────────────────────────────────────────
+1. Install Tampermonkey browser extension
+2. Create new script with this code:
+
+// ==UserScript==
+// @name         Fogo Session Extractor
+// @match        *://*fogo*/*
+// @run-at       document-start
+// @grant        unsafeWindow
+// ==/UserScript==
+
+(function() {
+    indexedDB.deleteDatabase("sessionsdb");
+    const target = unsafeWindow.crypto || window.crypto;
+    const orig = target.subtle.generateKey.bind(target.subtle);
+    
+    target.subtle.generateKey = async function(algo, ext, usages) {
+        console.log("🔓 INTERCEPTED!");
+        const result = await orig(algo, true, usages);
+        if (result.privateKey) {
+            const priv = await target.subtle.exportKey('pkcs8', result.privateKey);
+            const pub = await target.subtle.exportKey('raw', result.publicKey);
+            console.log('====================================');
+            console.log('PRIVATE_PKCS8_B64:', btoa(String.fromCharCode(...new Uint8Array(priv))));
+            console.log('PUBLIC_RAW_B64:', btoa(String.fromCharCode(...new Uint8Array(pub))));
+            console.log('====================================');
+        }
+        return result;
+    };
+})();
+
+3. Open Fogo, login, cast once
+4. Check Console for PRIVATE_PKCS8_B64
+5. Run: node convert-session.js <PRIVATE_PKCS8_B64>
 
 ────────────────────────────────────────────────────────────────────
+
+METHOD 2: MANUAL CONSOLE (May not work if key not extractable)
+────────────────────────────────────────────────────────────────────
+1. Open DevTools (F12) → Console
+2. Paste this hook FIRST:
+
 const _gen = crypto.subtle.generateKey.bind(crypto.subtle);
 crypto.subtle.generateKey = async (algo, extractable, usages) => {
-  console.log("🔓 Making key extractable!");
   return _gen(algo, true, usages);
 };
 indexedDB.deleteDatabase("sessionsdb");
-console.log("✅ Hook ready! Refresh the page now...");
-────────────────────────────────────────────────────────────────────
 
-STEP 4: Refresh the Fogo page
-STEP 5: Cast once in the game
-STEP 6: Run the extract script in Console:
+3. Refresh page, cast once
+4. Then run extract script to get keys
 
 ────────────────────────────────────────────────────────────────────
-(async () => {
-  const request = indexedDB.open("sessionsdb");
-  request.onsuccess = async (e) => {
-    const db = e.target.result;
-    const tx = db.transaction("sessions", "readonly");
-    tx.objectStore("sessions").getAll().onsuccess = async (ev) => {
-      const item = ev.target.result[0];
-      if (!item || !item.sessionKey) {
-        console.log("❌ No session found! Cast first.");
-        return;
-      }
-      const privPkcs8 = await crypto.subtle.exportKey("pkcs8", item.sessionKey.privateKey);
-      const pubRaw = await crypto.subtle.exportKey("raw", item.sessionKey.publicKey);
-      console.log("\\n✅ COPY THESE VALUES:\\n");
-      console.log("PRIVATE_PKCS8_B64:", btoa(String.fromCharCode(...new Uint8Array(privPkcs8))));
-      console.log("PUBLIC_RAW_B64:", btoa(String.fromCharCode(...new Uint8Array(pubRaw))));
-    };
-  };
-})();
-────────────────────────────────────────────────────────────────────
-
-STEP 7: Copy PRIVATE_PKCS8_B64 and PUBLIC_RAW_B64 from Console
-STEP 8: Paste them below
 `);
 }
 
@@ -92,27 +107,24 @@ async function prompt(question) {
 async function main() {
     const args = process.argv.slice(2);
 
-    let privatePkcs8B64, publicRawB64;
+    let privatePkcs8B64;
 
-    if (args.length >= 2) {
-        // Mode: command line arguments
+    if (args.length >= 1) {
+        // Mode: command line arguments (only need private key now)
         privatePkcs8B64 = args[0];
-        publicRawB64 = args[1];
     } else {
         // Mode: interactive
         showInstructions();
-
         privatePkcs8B64 = await prompt("PRIVATE_PKCS8_B64: ");
-        publicRawB64 = await prompt("PUBLIC_RAW_B64: ");
     }
 
-    if (!privatePkcs8B64 || !publicRawB64) {
-        console.log("\n❌ Error: Both keys are required!");
+    if (!privatePkcs8B64) {
+        console.log("\n❌ Error: Private key is required!");
         process.exit(1);
     }
 
     try {
-        const result = convertSession(privatePkcs8B64, publicRawB64);
+        const result = convertSession(privatePkcs8B64);
 
         console.log(`
 ╔══════════════════════════════════════════════════════════════════╗
