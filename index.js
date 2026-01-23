@@ -13,7 +13,7 @@ dotenv.config();
 
 // Fixed endpoints
 const RPC_URL = "https://eu.fogo.fluxrpc.com/?key=74a5f926-d7b0-4c72-9a5c-0eaec1a57781";
-const PAYMASTER_URL = "https://mainnet.fogo-paymaster.xyz/api/sponsor_and_send?domain=https%3A%2F%2Ffogofishing.com";
+const PAYMASTER_URL = "https://fogo-mainnet.dourolabs-paymaster.xyz/api/sponsor_and_send?domain=https%3A%2F%2Ffogofishing.com"";
 const CAPABILITY_URL = "https://cast.fogofishing.com/capability";
 const PROGRAM_ID = new PublicKey("SEAyjT1FUx3JyXJnWt5NtjELDwuU9XsoZeZVPVvweU4");
 
